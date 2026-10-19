@@ -1,0 +1,30 @@
+{
+  "name": "exhale",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "test": "node --test \"src/engine/*.test.ts\""
+  },
+  "dependencies": {
+    "framer-motion": "^12.42.2",
+    "lucide-react": "^1.22.0",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "sql.js": "^1.13.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.2",
+    "@types/node": "^24.13.2",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@types/sql.js": "^1.4.9",
+    "@vitejs/plugin-react": "^6.0.3",
+    "tailwindcss": "^4.3.2",
+    "typescript": "~6.0.2",
+    "vite": "^8.1.1"
+  }
+}
