@@ -51,7 +51,8 @@ export function UIProvider({ children }: { children: ReactNode }) {
   const toast = useCallback((text: string, tone: Toast['tone'] = 'info') => {
     const id = nextId.current++;
     setToasts((ts) => [...ts.slice(-2), { id, text, tone }]);
-    window.setTimeout(() => setToasts((ts) => ts.filter((t) => t.id !== id)), 3200);
+    // Long enough to read: about 70 ms a character, never under 3.2 s.
+    window.setTimeout(() => setToasts((ts) => ts.filter((t) => t.id !== id)), Math.max(3200, text.length * 70));
   }, []);
 
   const value = useMemo<UIValue>(

@@ -1,5 +1,6 @@
-import { AnimatePresence } from 'framer-motion';
-import { useEffect, useRef, type ReactNode } from 'react';
+import { AnimatePresence, MotionConfig } from 'framer-motion';
+import { Component, useEffect, useRef, useSyncExternalStore, type ErrorInfo, type ReactNode } from 'react';
+import { flushPersist, getPersistState, subscribePersist } from './db/sqlite.ts';
 import { BottomNav, Banners } from './components/Chrome.tsx';
 import { Toasts } from './components/ui.tsx';
 import { useNow } from './hooks/useNow.ts';
@@ -11,6 +12,7 @@ import { Home } from './screens/Home.tsx';
 import { Lab } from './screens/Lab.tsx';
 import { Onboarding } from './screens/Onboarding.tsx';
 import { EngineProvider, useProfile } from './state/engine.tsx';
+import { useJudgeMode } from './state/judge.ts';
 import { Monitor } from './state/Monitor.tsx';
 import { UIProvider, useUI, type Overlay } from './state/ui.tsx';
 
@@ -51,12 +53,48 @@ function OverlayView({ overlay, close }: { overlay: Overlay; close: () => void }
   }
 }
 
+/** Keeps one broken screen from blanking the whole app mid-demo. */
+class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
+  state: { error: Error | null } = { error: null };
+
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    console.error(error, info.componentStack);
+  }
+
+  render() {
+    if (!this.state.error) return this.props.children;
+    return (
+      <div className="flex flex-1 flex-col items-center justify-center gap-4 px-8 text-center">
+        <div className="font-display text-xl font-semibold">Something went wrong</div>
+        <p className="text-sm text-muted">Your data is stored on this device and hasn’t been touched. Reloading usually fixes this.</p>
+        <button
+          className="btn btn-primary"
+          onClick={() => {
+            void flushPersist().finally(() => window.location.reload());
+          }}
+        >
+          Reload
+        </button>
+      </div>
+    );
+  }
+}
+
 function Shell() {
-  const { tab, overlay, overlayKey, close } = useUI();
+  const { tab, setTab, overlay, overlayKey, close } = useUI();
+  const judge = useJudgeMode();
   const scroller = useRef<HTMLElement>(null);
   useEffect(() => {
     scroller.current?.scrollTo({ top: 0 });
   }, [tab]);
+  // Leaving judge mode while on the Lab tab drops you back home.
+  useEffect(() => {
+    if (tab === 'lab' && !judge) setTab('home');
+  }, [tab, judge, setTab]);
 
   return (
     <>
@@ -66,7 +104,7 @@ function Shell() {
         {tab === 'home' && <Home />}
         {tab === 'forecast' && <Forecast />}
         {tab === 'apps' && <Apps />}
-        {tab === 'lab' && <Lab />}
+        {tab === 'lab' && judge && <Lab />}
       </main>
       <BottomNav />
       <AnimatePresence>{overlay && <OverlayView key={overlayKey} overlay={overlay} close={close} />}</AnimatePresence>
@@ -78,7 +116,7 @@ function Shell() {
 function PhoneFrame({ children }: { children: ReactNode }) {
   return (
     <div className="min-h-dvh w-full bg-ink sm:flex sm:items-center sm:justify-center sm:bg-[radial-gradient(60%_60%_at_50%_40%,#0c2230,#03080d)] sm:p-6">
-      <div className="relative mx-auto flex h-dvh w-full max-w-[430px] flex-col overflow-hidden bg-bg sm:h-[880px] sm:max-h-[calc(100dvh-48px)] sm:rounded-[3rem] sm:border-[10px] sm:border-[#0d1820] sm:shadow-[0_40px_120px_-30px_rgb(0_0_0/0.9),0_0_0_1px_#1c3546]">
+      <div className="relative mx-auto flex h-dvh w-full max-w-[430px] flex-col overflow-hidden bg-bg pt-[env(safe-area-inset-top)] sm:h-[880px] sm:pt-0 sm:max-h-[calc(100dvh-48px)] sm:rounded-[3rem] sm:border-[10px] sm:border-[#0d1820] sm:shadow-[0_40px_120px_-30px_rgb(0_0_0/0.9),0_0_0_1px_#1c3546]">
         <StatusBar />
         {children}
       </div>
@@ -86,19 +124,40 @@ function PhoneFrame({ children }: { children: ReactNode }) {
   );
 }
 
+/** Shown in an older tab once a newer one owns the database (see db/sqlite.ts). */
+function OpenElsewhere() {
+  return (
+    <div className="flex flex-1 flex-col items-center justify-center gap-4 px-8 text-center">
+      <div className="font-display text-xl font-semibold">Exhale is open in another tab</div>
+      <p className="text-sm text-muted">Only one tab can save your progress at a time, so this one has paused to keep your data safe.</p>
+      <button className="btn btn-primary" onClick={() => window.location.reload()}>
+        Use Exhale here
+      </button>
+    </div>
+  );
+}
+
 export default function App() {
   const profile = useProfile();
+  const { replaced } = useSyncExternalStore(subscribePersist, getPersistState);
   return (
-    <PhoneFrame>
-      {profile ? (
-        <UIProvider>
-          <EngineProvider profile={profile}>
-            <Shell />
-          </EngineProvider>
-        </UIProvider>
-      ) : (
-        <Onboarding />
-      )}
-    </PhoneFrame>
+    // Honour the system "reduce motion" setting for framer-motion too (CSS only covers CSS).
+    <MotionConfig reducedMotion="user">
+      <PhoneFrame>
+        {replaced ? (
+          <OpenElsewhere />
+        ) : profile ? (
+          <ErrorBoundary>
+            <UIProvider>
+              <EngineProvider profile={profile}>
+                <Shell />
+              </EngineProvider>
+            </UIProvider>
+          </ErrorBoundary>
+        ) : (
+          <Onboarding />
+        )}
+      </PhoneFrame>
+    </MotionConfig>
   );
 }

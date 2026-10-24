@@ -2,8 +2,10 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { ArrowRight, Bell, BrainCircuit, ChevronLeft, Lock, Mic, Sparkles, Sprout, Wind } from 'lucide-react';
 import { useState, type ReactNode } from 'react';
 import { createProfile, seedDemo } from '../db/repo.ts';
+import { requestDurableStorage } from '../db/sqlite.ts';
 import { LOCKABLE_APPS } from '../lib/apps.ts';
 import { now } from '../state/clock.ts';
+import { setJudgeMode } from '../state/judge.ts';
 
 const LAST_USE = [
   { label: 'Just now', minutes: 0 },
@@ -55,6 +57,9 @@ export function Onboarding() {
     } catch {
       /* ignore */
     }
+    // Ask the browser to keep our data under storage pressure. Not awaited: Firefox shows a
+    // prompt, and onboarding shouldn't wait on the answer.
+    void requestDurableStorage();
     const t = now();
     createProfile({
       name: name.trim(),
@@ -84,8 +89,12 @@ export function Onboarding() {
           <p className="mt-2 max-w-[18rem] text-[15px] leading-relaxed text-muted">Quit vaping with an app that sees cravings coming before you do.</p>
           <div className="mt-10 flex w-full flex-col gap-3 text-left">
             {[
-              [<BrainCircuit size={18} />, 'Predicts your cravings', 'An on-device model learns your triggers and warns you 15–30 min early.'],
-              [<Lock size={18} />, 'Locks your apps if you slip', 'A pact with yourself, enforced by the phone’s own Screen Time shield.'],
+              [<BrainCircuit size={18} />, 'Predicts your cravings', 'An on-device model learns your triggers and warns you up to 30 minutes early.'],
+              [
+                <Lock size={18} />,
+                'Locks your apps if you slip',
+                'A pact with yourself. The native app uses the phone’s Screen Time shield; this web version shows how it works.',
+              ],
               [<Sprout size={18} />, 'Heals with you', 'Watch your lungs recover in real time and level up every craving you beat.'],
             ].map(([icon, title, body]) => (
               <div key={title as string} className="card flex gap-3 p-4">
@@ -102,7 +111,14 @@ export function Onboarding() {
           <button className="btn btn-primary py-4 text-base" onClick={() => setStep(1)}>
             Start my quit <ArrowRight size={18} />
           </button>
-          <button className="btn btn-ghost" onClick={() => seedDemo(now())}>
+          <button
+            className="btn btn-ghost"
+            onClick={() => {
+              // The demo user is for judges and testers, so it opens with the Lab available.
+              seedDemo(now());
+              setJudgeMode(true);
+            }}
+          >
             <Sparkles size={16} className="text-violet" /> Explore with a demo user
           </button>
         </div>
@@ -139,7 +155,7 @@ export function Onboarding() {
             <div className="eyebrow mb-2 mt-6">When did you last vape?</div>
             <div className="flex flex-wrap gap-2">
               {LAST_USE.map((o) => (
-                <button key={o.label} className="chip" data-on={lastUse === o.minutes} onClick={() => setLastUse(o.minutes)}>
+                <button key={o.label} className="chip" data-on={lastUse === o.minutes} aria-pressed={lastUse === o.minutes} onClick={() => setLastUse(o.minutes)}>
                   {o.label}
                 </button>
               ))}
@@ -158,7 +174,7 @@ export function Onboarding() {
                       <button
                         key={label}
                         className="chip"
-                        data-on={answers[qi] === pts}
+                        data-on={answers[qi] === pts} aria-pressed={answers[qi] === pts}
                         onClick={() => setAnswers((a) => a.map((v, i) => (i === qi ? pts : v)))}
                       >
                         {label}
@@ -197,10 +213,14 @@ export function Onboarding() {
         )}
 
         {step === 4 && (
-          <Step key="4" title="Make the pact" subtitle="If you log nicotine use, or skip an honesty check-in, these apps lock. Calls and texts always work.">
+          <Step
+            key="4"
+            title="Make the pact"
+            subtitle="If you log nicotine use, or skip an honesty check-in while Exhale is open, these apps lock. Calls and texts always work."
+          >
             <div className="flex flex-wrap gap-2">
               {LOCKABLE_APPS.map((a) => (
-                <button key={a.id} className="chip" data-on={apps.includes(a.id)} onClick={() => setApps((s) => (s.includes(a.id) ? s.filter((x) => x !== a.id) : [...s, a.id]))}>
+                <button key={a.id} className="chip" data-on={apps.includes(a.id)} aria-pressed={apps.includes(a.id)} onClick={() => setApps((s) => (s.includes(a.id) ? s.filter((x) => x !== a.id) : [...s, a.id]))}>
                   {a.name}
                 </button>
               ))}
@@ -208,14 +228,15 @@ export function Onboarding() {
             <div className="eyebrow mb-2 mt-6">Lock for</div>
             <div className="flex gap-2">
               {[15, 30, 45, 60].map((m) => (
-                <button key={m} className="chip flex-1" data-on={lockMinutes === m} onClick={() => setLockMinutes(m)}>
+                <button key={m} className="chip flex-1" data-on={lockMinutes === m} aria-pressed={lockMinutes === m} onClick={() => setLockMinutes(m)}>
                   {m} min
                 </button>
               ))}
             </div>
             <div className="card mt-6 flex flex-col gap-3 p-4 text-sm text-muted">
               <div className="flex gap-2.5">
-                <Bell size={16} className="mt-0.5 shrink-0 text-sky" /> Notifications warn you before a predicted high-risk window.
+                <Bell size={16} className="mt-0.5 shrink-0 text-sky" /> Exhale warns you before a predicted high-risk window while it’s open or
+                in the background. The web version can’t reach you once it’s fully closed.
               </div>
               <div className="flex gap-2.5">
                 <Mic size={16} className="mt-0.5 shrink-0 text-sky" /> The mic measures breath strength during exercises. Nothing is recorded.

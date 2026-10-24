@@ -1,9 +1,10 @@
 @import "tailwindcss";
 
 @theme {
-  --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
-  --font-display: 'Outfit', 'Inter', system-ui, sans-serif;
-  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+  /* System fonts (SF Pro on iPhone, Roboto on Android): no font downloads from third parties. */
+  --font-sans: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+  --font-display: ui-rounded, 'SF Pro Rounded', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', Menlo, Consolas, 'Roboto Mono', monospace;
 
   --color-ink: #03080d;
   --color-bg: #061019;
@@ -13,7 +14,7 @@
   --color-line: #1c3546;
   --color-text: #e6f1f5;
   --color-muted: #87a1b1;
-  --color-faint: #5a7586;
+  --color-faint: #7891a2; /* ≥4.5:1 on every surface, for small text */
 
   --color-mint: #5eead4;
   --color-sky: #7dd3fc;

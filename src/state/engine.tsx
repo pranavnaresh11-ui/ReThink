@@ -24,7 +24,13 @@ export interface EngineValue {
   profile: Profile;
   history: History;
   model: PersonalModel;
+  /** What the screens show: the Lab's sensor overrides when `simulated`, otherwise live. */
   risk: RiskAssessment;
+  /**
+   * Always computed from real time and real history, ignoring the Lab simulation. Use this
+   * for anything written to the database, so simulated readings never become training data.
+   */
+  liveRisk: RiskAssessment;
   simulated: boolean;
   forecast: ForecastPoint[];
   /** Stretches above the 75% intervention threshold. */
@@ -64,17 +70,19 @@ export function EngineProvider({ profile, children }: { profile: Profile; childr
   const history = useMemo(() => loadHistory(profile), [profile, dbVersion]);
   // Retrain when the data changes, or hourly as new quiet hours accumulate.
   const model = useMemo(() => fitPersonalModel(history, now()), [history, hourKey]);
+  const liveRisk = useMemo(() => assessRisk(history, model, t), [history, model, t]);
   const risk = useMemo(
     () =>
-      assessRisk(
-        history,
-        model,
-        t,
-        sim.enabled
-          ? { weekday: sim.weekday, minute: sim.minute, minutesSinceUse: sim.minutesSinceUse, stress: sim.stress, location: sim.location }
-          : {},
-      ),
-    [history, model, t, sim],
+      sim.enabled
+        ? assessRisk(history, model, t, {
+            weekday: sim.weekday,
+            minute: sim.minute,
+            minutesSinceUse: sim.minutesSinceUse,
+            stress: sim.stress,
+            location: sim.location,
+          })
+        : liveRisk,
+    [history, model, t, sim, liveRisk],
   );
   const forecast = useMemo(() => forecastRisk(history, model, minuteKey * 60_000), [history, model, minuteKey]);
   const windows = useMemo(() => riskWindows(forecast), [forecast]);
@@ -88,6 +96,7 @@ export function EngineProvider({ profile, children }: { profile: Profile; childr
     history,
     model,
     risk,
+    liveRisk,
     simulated: sim.enabled,
     forecast,
     windows,

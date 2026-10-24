@@ -1,11 +1,13 @@
 import { motion } from 'framer-motion';
 import { Hand, Mic, MicOff, X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
+import { breathExercisePassed, cravingReward, fightResult, strikeDamage } from '../engine/fight.ts';
 import { streakDays } from '../engine/recovery.ts';
-import { useMicLevel } from '../hooks/useMicLevel.ts';
+import { micProblem, useMicLevel } from '../hooks/useMicLevel.ts';
 import { HAPTICS, haptic } from '../lib/haptics.ts';
-import { earnLockTime, passHonestyCheck, resistCraving, LOCK_REDUCTION_MIN } from '../state/actions.ts';
+import { earnLockTime, passHonestyCheck, resistCraving, startHonestyAttempt, LOCK_REDUCTION_MIN } from '../state/actions.ts';
 import { now } from '../state/clock.ts';
+import { useDialog } from '../components/ui.tsx';
 import { useEngine } from '../state/engine.tsx';
 import { useUI, type FightMode } from '../state/ui.tsx';
 
@@ -103,9 +105,11 @@ function Boss({ hp, hitKey }: { hp: number; hitKey: number }) {
 
 export function BossFight({ mode, onClose }: { mode: FightMode; onClose: () => void }) {
   const cfg = CONFIG[mode];
-  const { risk, history } = useEngine();
+  // Logging always uses live readings, even while the Lab simulates sensors.
+  const { liveRisk, history, simulated } = useEngine();
   const { toast, open } = useUI();
   const mic = useMicLevel();
+  const dialog = useDialog<HTMLDivElement>(onClose);
   const [stage, setStage] = useState<'intro' | 'run' | 'result'>('intro');
   const [input, setInput] = useState<'mic' | 'touch'>('mic');
   const [frame, setFrame] = useState({ elapsed: 0, level: 0, threshold: 0.1, blowing: false });
@@ -114,6 +118,10 @@ export function BossFight({ mode, onClose }: { mode: FightMode; onClose: () => v
   const [result, setResult] = useState({ blowSecs: 0, steadiness: 0 });
   const [round, setRound] = useState(1);
   const touching = useRef(false);
+  /** Each result screen can be acted on once, even if the button is tapped twice while the overlay animates out. */
+  const settled = useRef(false);
+  /** Bumped on every start, so a mic permission answer that arrives late can't restart a round. */
+  const attempt = useRef(0);
 
   const cycleLen = cfg.pattern.reduce((s, p) => s + p.secs, 0);
   const total = cycleLen * cfg.cycles;
@@ -134,9 +142,10 @@ export function BossFight({ mode, onClose }: { mode: FightMode; onClose: () => v
     let raf = 0;
 
     const strike = (secs: number) => {
-      const dmg = (100 / cfg.cycles) * Math.min(1, secs / (exhaleSecs * 0.6));
+      const dmg = strikeDamage(secs, exhaleSecs, cfg.cycles);
       if (dmg <= 0) return;
-      setHp((h) => Math.max(0, h - dmg));
+      // Snap the floating-point sliver three full hits of 100/3 leave behind.
+      setHp((h) => (fightResult(h - dmg) === 'DEFEATED' ? 0 : h - dmg));
       setHitKey((k) => k + 1);
     };
 
@@ -188,12 +197,27 @@ export function BossFight({ mode, onClose }: { mode: FightMode; onClose: () => v
     return () => cancelAnimationFrame(raf);
   }, [stage, input, cfg, cycleLen, total, exhaleSecs, mic.level]);
 
+  // If the mic drops out mid-round (another app grabs it, a call comes in), switch to touch.
+  useEffect(() => {
+    if (stage !== 'run' || input !== 'mic' || mic.status === 'live' || mic.status === 'requesting') return;
+    setInput('touch');
+    toast(`${micProblem(mic.status) ?? 'The mic stopped.'} Hold the button while you exhale instead.`, 'info');
+  }, [stage, input, mic.status, toast]);
+
+  /** Called straight from a tap, so the mic's audio can start on iOS. */
   const begin = async (preferMic: boolean) => {
-    const ok = preferMic ? await mic.start() : false;
-    setInput(ok ? 'mic' : 'touch');
-    if (preferMic && !ok) toast('Mic unavailable, so hold the button while you exhale instead.', 'info');
-    setHp(100);
+    // Starting the breath test buys time to finish it, even if the deadline passes mid-test.
+    if (mode === 'check') startHonestyAttempt();
+    const id = ++attempt.current;
+    const status = preferMic ? await mic.start() : 'idle';
+    // The permission prompt can sit unanswered; if the user moved on (e.g. chose touch), drop this result.
+    if (id !== attempt.current) return;
+    setInput(status === 'live' ? 'mic' : 'touch');
+    if (preferMic && status !== 'live') toast(`${micProblem(status) ?? 'Mic unavailable.'} Hold the button while you exhale instead.`, 'info');
+    // Another round keeps fighting the same boss; a beaten boss respawns at full HP.
+    setHp((h) => (stage === 'intro' || h <= 0 ? 100 : h));
     setHitKey(0);
+    settled.current = false;
     setStage('run');
   };
 
@@ -206,20 +230,35 @@ export function BossFight({ mode, onClose }: { mode: FightMode; onClose: () => v
   const phaseFrac = Math.min(1, within / phase.secs);
   const orbScale = phase.name === 'inhale' ? 0.55 + 0.45 * phaseFrac : phase.name === 'hold' ? 1 : 1 - 0.45 * phaseFrac;
 
-  const passed = mode === 'check' ? result.blowSecs >= 4 : result.blowSecs >= maxBlow * 0.4;
+  const passed = mode !== 'craving' && breathExercisePassed(mode, result.blowSecs, maxBlow);
   const streak = streakDays(history, now());
-  const stressLevel = Math.round(risk.features.S * 4 + 1);
+  const outcome = fightResult(hp);
+  const reward = cravingReward(outcome, streak);
 
-  const finishCraving = () => {
-    const r = resistCraving({ completed: true, stress: stressLevel, location: risk.location, predictedRisk: risk.p, streakDays: streak });
-    toast(`+${r.xp} XP${r.multiplier > 1 ? ` (×${r.multiplier.toFixed(1)} streak)` : ''}`, 'xp');
+  /** Runs `fn` at most once per result screen. */
+  const once = (fn: () => void) => () => {
+    if (settled.current) return;
+    settled.current = true;
+    fn();
+  };
+
+  const finishCraving = once(() => {
+    // Stress stays null: the fight doesn't ask for it, and an inferred value would be saved as if self-reported.
+    const r = resistCraving({ result: outcome, stress: null, location: liveRisk.location, predictedRisk: liveRisk.p, streakDays: streak });
+    if (r.xp > 0) toast(`+${r.xp} XP${r.multiplier > 1 ? ` (×${r.multiplier.toFixed(1)} streak)` : ''}`, 'xp');
+    else toast('Craving logged. Breathe into the mic next time to earn XP.', 'info');
     if (r.skipPass) toast('You earned a skip pass!', 'xp');
     onClose();
-  };
+  });
 
   return (
     <motion.div
-      className="absolute inset-0 z-40 flex flex-col overflow-y-auto bg-[radial-gradient(120%_70%_at_50%_0%,#163a40,#061019_70%)] px-5 pb-8 pt-4 no-scrollbar"
+      ref={dialog}
+      role="dialog"
+      aria-modal="true"
+      aria-label={cfg.title}
+      tabIndex={-1}
+      className="absolute inset-0 z-40 flex flex-col overflow-y-auto outline-none bg-[radial-gradient(120%_70%_at_50%_0%,#163a40,#061019_70%)] px-5 pb-[max(2rem,env(safe-area-inset-bottom))] pt-[max(1rem,env(safe-area-inset-top))] no-scrollbar"
       initial={{ opacity: 0, scale: 0.98 }}
       animate={{ opacity: 1, scale: 1 }}
       exit={{ opacity: 0, scale: 0.98 }}
@@ -255,6 +294,16 @@ export function BossFight({ mode, onClose }: { mode: FightMode; onClose: () => v
           )}
           <p className="mt-6 text-center text-[15px] leading-relaxed text-text/90">{cfg.blurb}</p>
           <p className="mt-2 text-center text-xs text-muted">Audio is measured live for loudness only. Nothing is recorded or saved.</p>
+          {mic.status === 'requesting' && (
+            <p className="mt-3 text-center text-xs text-sky" role="status">
+              Waiting for microphone permission. Allow it in your browser’s prompt, or use touch instead.
+            </p>
+          )}
+          {simulated && mode === 'craving' && (
+            <p className="mt-3 rounded-xl bg-violet/10 px-3 py-2 text-center text-xs text-violet">
+              Sensor override is on. If you log this craving, it’s saved with live readings, not the simulated ones.
+            </p>
+          )}
           <div className="mt-auto flex flex-col gap-2 pt-8">
             <button className="btn btn-primary py-4 text-base" onClick={() => begin(true)}>
               <Mic size={18} /> Start with microphone
@@ -321,12 +370,29 @@ export function BossFight({ mode, onClose }: { mode: FightMode; onClose: () => v
         <div className="mt-6 flex flex-1 flex-col">
           <div className="text-center">
             <div className="font-display text-3xl font-bold">
-              {mode === 'craving' ? (hp <= 0 ? 'Craving defeated' : hp < 100 ? 'Craving weakened' : 'Round complete') : passed ? 'Nice breathing' : 'Not quite'}
+              {mode === 'craving'
+                ? outcome === 'DEFEATED'
+                  ? 'Craving defeated'
+                  : outcome === 'WEAKENED'
+                    ? 'Craving weakened'
+                    : 'No exhale detected'
+                : passed
+                  ? 'Nice breathing'
+                  : 'Not quite'}
             </div>
             <p className="mt-2 text-sm text-muted">
               {result.blowSecs.toFixed(1)} s of steady exhale
               {input === 'mic' && result.blowSecs > 0 && ` · steadiness ${Math.round(result.steadiness * 100)}%`}
             </p>
+            {mode === 'craving' && (
+              <p className="mx-auto mt-3 max-w-xs text-xs leading-relaxed text-muted">
+                {outcome === 'DEFEATED'
+                  ? 'Full XP, and it counts toward your next skip pass.'
+                  : outcome === 'WEAKENED'
+                    ? `The boss has ${Math.ceil(hp)} HP left: half XP if you stop now, or go another round to finish it.`
+                    : 'No XP this round. Logging that the craving passed still teaches your forecast.'}
+              </p>
+            )}
           </div>
 
           <div className="mt-auto flex flex-col gap-2 pt-8">
@@ -334,7 +400,7 @@ export function BossFight({ mode, onClose }: { mode: FightMode; onClose: () => v
               <>
                 <p className="mb-1 text-center text-sm">How’s the craving now?</p>
                 <button className="btn btn-primary py-4 text-base" onClick={finishCraving}>
-                  It passed. Claim XP
+                  {reward.xp > 0 ? `It passed. Claim +${reward.xp} XP` : 'It passed. Log it'}
                 </button>
                 <button
                   className="btn btn-ghost"
@@ -347,10 +413,10 @@ export function BossFight({ mode, onClose }: { mode: FightMode; onClose: () => v
                 </button>
                 <button
                   className="btn btn-danger"
-                  onClick={() => {
+                  onClick={once(() => {
                     onClose();
                     open({ kind: 'relapse' });
-                  }}
+                  })}
                 >
                   I vaped anyway
                 </button>
@@ -360,11 +426,11 @@ export function BossFight({ mode, onClose }: { mode: FightMode; onClose: () => v
               (passed ? (
                 <button
                   className="btn btn-primary py-4 text-base"
-                  onClick={() => {
+                  onClick={once(() => {
                     if (earnLockTime('breathing')) toast(`−${LOCK_REDUCTION_MIN} min on your lock`, 'xp');
-                    else toast('You’ve already earned the maximum back for this lock.', 'info');
+                    else toast('No active lock, or you’ve already earned the maximum back.', 'info');
                     onClose();
-                  }}
+                  })}
                 >
                   Take {LOCK_REDUCTION_MIN} minutes off
                 </button>
@@ -377,11 +443,11 @@ export function BossFight({ mode, onClose }: { mode: FightMode; onClose: () => v
               (passed ? (
                 <button
                   className="btn btn-primary py-4 text-base"
-                  onClick={() => {
-                    passHonestyCheck();
-                    toast('Check-in passed · +10 XP', 'xp');
+                  onClick={once(() => {
+                    if (passHonestyCheck()) toast('Check-in passed · +10 XP', 'xp');
+                    else toast('That check-in had already closed, so there’s nothing to pass.', 'info');
                     onClose();
-                  }}
+                  })}
                 >
                   Done
                 </button>

@@ -1,10 +1,36 @@
 import { AnimatePresence, motion } from 'framer-motion';
 import { X } from 'lucide-react';
-import type { ReactNode } from 'react';
+import { useEffect, useRef, type ReactNode } from 'react';
 import { levelFromXp, rankTitle, streakMultiplier } from '../engine/xp.ts';
 import { useUI } from '../state/ui.tsx';
 
+/**
+ * For overlays: Escape closes, focus moves into the overlay when it opens and goes back to
+ * where it was when it closes. Put the returned ref on an element with tabIndex={-1}.
+ */
+export function useDialog<T extends HTMLElement>(onClose: () => void) {
+  const ref = useRef<T>(null);
+  const close = useRef(onClose);
+  useEffect(() => {
+    close.current = onClose;
+  }, [onClose]);
+  useEffect(() => {
+    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    ref.current?.focus({ preventScroll: true });
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') close.current();
+    };
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      previous?.focus({ preventScroll: true });
+    };
+  }, []);
+  return ref;
+}
+
 export function Sheet({ title, onClose, children }: { title?: string; onClose: () => void; children: ReactNode }) {
+  const dialog = useDialog<HTMLDivElement>(onClose);
   return (
     <div className="absolute inset-0 z-40 flex flex-col justify-end">
       <motion.button
@@ -16,10 +42,12 @@ export function Sheet({ title, onClose, children }: { title?: string; onClose: (
         onClick={onClose}
       />
       <motion.div
+        ref={dialog}
         role="dialog"
         aria-modal="true"
         aria-label={title}
-        className="relative max-h-[88%] overflow-y-auto rounded-t-[2rem] border-t border-line bg-surface px-5 pb-8 pt-3 no-scrollbar"
+        tabIndex={-1}
+        className="relative max-h-[88%] outline-none overflow-y-auto rounded-t-[2rem] border-t border-line bg-surface px-5 pb-[max(2rem,env(safe-area-inset-bottom))] pt-3 no-scrollbar"
         initial={{ y: '100%' }}
         animate={{ y: 0 }}
         exit={{ y: '100%' }}
@@ -111,7 +139,7 @@ export function LevelCard({ xp, streak }: { xp: number; streak: number }) {
 export function Toasts() {
   const { toasts } = useUI();
   return (
-    <div className="pointer-events-none absolute inset-x-0 top-14 z-50 flex flex-col items-center gap-2 px-4">
+    <div className="pointer-events-none absolute inset-x-0 top-[calc(env(safe-area-inset-top)+3.5rem)] z-50 flex flex-col items-center gap-2 px-4">
       <AnimatePresence>
         {toasts.map((t) => (
           <motion.div

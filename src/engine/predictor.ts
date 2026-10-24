@@ -1,6 +1,8 @@
 import {
   MS_PER_DAY,
   MS_PER_MIN,
+  addDays,
+  atMinuteOfDay,
   baselineStress,
   featuresAt,
   inferLocation,
@@ -80,12 +82,12 @@ export function buildTrainingSet(h: History, now: number): Sample[] {
     .map((c) => ({ at: c.at, location: c.location }));
 
   const margin = QUIET_MARGIN_MIN * MS_PER_MIN;
-  for (let day = startOfDay(h.trackingStart); day <= now; day += MS_PER_DAY) {
+  for (let day = startOfDay(h.trackingStart); day <= now; day = addDays(day, 1)) {
     const d = new Date(day);
     const rng = mulberry32(d.getFullYear() * 10_000 + (d.getMonth() + 1) * 100 + d.getDate());
     for (let k = 0; k < NEGATIVES_PER_DAY; k++) {
       const minute = WAKING_START_MIN + rng() * (WAKING_END_MIN - WAKING_START_MIN);
-      const at = day + minute * MS_PER_MIN;
+      const at = atMinuteOfDay(day, minute);
       if (at < h.trackingStart || at > now) continue;
       if (positives.some((p) => Math.abs(p.at - at) < margin)) continue;
       negatives.push({ at, location: inferLocation(at) });
@@ -170,7 +172,7 @@ export function assessRisk(h: History, model: PersonalModel, now: number, o: Fea
   let at = now;
   if (o.minute != null || o.weekday != null) {
     const daysAhead = o.weekday == null ? 0 : (o.weekday - new Date(now).getDay() + 7) % 7;
-    at = startOfDay(now) + daysAhead * MS_PER_DAY + (o.minute ?? minuteOfDay(now)) * MS_PER_MIN;
+    at = atMinuteOfDay(addDays(now, daysAhead), o.minute ?? minuteOfDay(now));
   }
   const snap = featuresAt(h, at, o.location ?? inferLocation(at));
   const minutesSinceUse = o.minutesSinceUse ?? snap.minutesSinceUse;

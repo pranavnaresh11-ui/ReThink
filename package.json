@@ -3,11 +3,15 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
+  "engines": {
+    "node": ">=22.18"
+  },
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "typecheck": "tsc -b",
     "preview": "vite preview",
-    "test": "node --test \"src/engine/*.test.ts\""
+    "test": "node --test \"src/**/*.test.ts\""
   },
   "dependencies": {
     "framer-motion": "^12.42.2",
