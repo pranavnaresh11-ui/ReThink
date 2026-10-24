@@ -90,7 +90,7 @@ export function Forecast() {
               </div>
               );
             })}
-            <p className="px-1 text-xs text-faint">High-risk windows (75%+) get a nudge up to 30 minutes before they start.</p>
+            <p className="px-1 text-xs text-faint">High-risk windows (75%+) get a nudge up to 30 minutes before they start, while Exhale is open or in the background.</p>
           </div>
         )}
       </Section>

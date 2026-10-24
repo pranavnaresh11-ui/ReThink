@@ -3,7 +3,8 @@ import { generateDemoHistory } from '../engine/demo.ts';
 import { encodeTimeOfDay, minuteOfDay } from '../engine/features.ts';
 import type { CheckIn, CravingEvent, CravingLevel, History, LocationTag, Outcome } from '../engine/types.ts';
 import type { TableName } from './schema.ts';
-import { getDb, schedulePersist } from './sqlite.ts';
+import { eraseStoredCopies, getDb, schedulePersist } from './sqlite.ts';
+import { wipeUserData } from './wipe.ts';
 
 // ── change notification ──────────────────────────────────────────────────────
 let version = 0;
@@ -41,6 +42,15 @@ function run(sql: string, params: BindParams = []): number {
   return Number(getDb().exec('SELECT last_insert_rowid()')[0]?.values[0][0] ?? 0);
 }
 
+/** Corrupt JSON in one cell shouldn't take the whole app down. */
+function parseJson<T>(text: string, fallback: T): T {
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    return fallback;
+  }
+}
+
 // ── user_profile ─────────────────────────────────────────────────────────────
 export interface Profile {
   name: string;
@@ -76,7 +86,7 @@ export function getProfile(): Profile | null {
     dependence: r.baseline_fagerstrom_score,
     dailyCost: r.daily_vape_cost,
     lockMinutes: r.lock_minutes,
-    lockedApps: JSON.parse(r.locked_apps) as string[],
+    lockedApps: parseJson<string[]>(r.locked_apps, []),
     xp: r.current_xp,
     skipPasses: r.streak_freeze_tokens,
   };
@@ -263,6 +273,18 @@ export function reduceLock(id: number, minutes: number): void {
   commit();
 }
 
+/**
+ * After the time machine jumps back to real time, a lock started in the "future" would
+ * otherwise last until that future arrives. Slide it so it starts now, same length.
+ */
+export function rebaseFutureLock(now: number): void {
+  const active = getActiveLock();
+  if (!active || active.start <= now) return;
+  const shift = active.start - now;
+  run('UPDATE lock_sessions SET start_time = start_time - ?, end_time = end_time - ? WHERE lock_id = ?', [shift, shift, active.id]);
+  commit();
+}
+
 /** The DeviceActivityMonitor `intervalDidEnd` equivalent. Returns true if a lock ended. */
 export function settleLocks(now: number): boolean {
   const active = getActiveLock();
@@ -275,7 +297,7 @@ export function settleLocks(now: number): boolean {
 // ── app_state (key/value) ────────────────────────────────────────────────────
 export function kvGet<T>(key: string): T | null {
   const r = all<{ value: string }>('SELECT value FROM app_state WHERE key = ?', [key])[0];
-  return r ? (JSON.parse(r.value) as T) : null;
+  return r ? parseJson<T | null>(r.value, null) : null;
 }
 
 export function kvSet(key: string, value: unknown): void {
@@ -290,14 +312,15 @@ export function kvDelete(key: string): void {
 
 // ── demo & maintenance ───────────────────────────────────────────────────────
 function wipe(): void {
-  getDb().exec('DELETE FROM lock_sessions; DELETE FROM craving_events; DELETE FROM check_ins; DELETE FROM user_profile;');
-  getDb().exec("DELETE FROM app_state WHERE key <> 'clock_offset_ms';");
+  // Loading the demo from the Lab shouldn't kick the judge out of the Lab.
+  wipeUserData(getDb(), ['clock_offset_ms', 'judge_mode']);
 }
 
+/** "Delete my data": every row, then every stored copy on the device. */
 export function resetAll(): void {
-  wipe();
-  getDb().exec('DELETE FROM app_state;');
+  wipeUserData(getDb());
   commit();
+  void eraseStoredCopies();
 }
 
 /** Replaces all data with two weeks of history from a demo user, so the personal model has something to learn. */

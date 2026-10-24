@@ -12,8 +12,10 @@ import {
   startLock,
   updateProfile,
 } from '../db/repo.ts';
+import type { PendingCheck } from '../engine/checks.ts';
+import { cravingReward, type FightResult } from '../engine/fight.ts';
 import type { CravingLevel, LocationTag } from '../engine/types.ts';
-import { WINS_PER_SKIP_PASS, XP_REWARDS, streakMultiplier } from '../engine/xp.ts';
+import { WINS_PER_SKIP_PASS, XP_REWARDS } from '../engine/xp.ts';
 import { now } from './clock.ts';
 
 export const LOCK_REDUCTION_MIN = 5;
@@ -25,34 +27,39 @@ const CHECK_IN_XP_COOLDOWN_MS = 2 * 3_600_000;
 export interface Reward {
   xp: number;
   multiplier: number;
+  completed: boolean;
   skipPass: boolean;
 }
 
+/**
+ * Logs a craving the user got through. Callers pass live (never simulated) readings:
+ * this row becomes training data for the personal model.
+ */
 export function resistCraving(opts: {
-  completed: boolean;
+  result: FightResult;
+  /** Only a stress level the user actually reported; null if they didn't. */
   stress: number | null;
   location: LocationTag;
   predictedRisk: number;
   streakDays: number;
 }): Reward {
+  const { xp, multiplier, completed } = cravingReward(opts.result, opts.streakDays);
   logCraving({
     at: now(),
     stress: opts.stress,
     location: opts.location,
     predictedRisk: opts.predictedRisk,
     outcome: 'RESISTED',
-    interventionCompleted: opts.completed,
+    interventionCompleted: completed,
   });
-  const multiplier = streakMultiplier(opts.streakDays);
-  const xp = Math.round((opts.completed ? XP_REWARDS.BOSS_WIN : XP_REWARDS.BOSS_WIN / 2) * multiplier);
-  addXp(xp);
+  if (xp > 0) addXp(xp);
   let skipPass = false;
-  if (opts.completed && countInterventionWins() % WINS_PER_SKIP_PASS === 0) {
+  if (completed && countInterventionWins() % WINS_PER_SKIP_PASS === 0) {
     const p = getProfile();
     if (p) updateProfile({ skipPasses: p.skipPasses + 1 });
     skipPass = true;
   }
-  return { xp, multiplier, skipPass };
+  return { xp, multiplier, completed, skipPass };
 }
 
 /** Honest relapse log: small XP for honesty, then the accountability lock starts. */
@@ -92,11 +99,6 @@ export function earnLockTime(kind: 'breathing' | 'reflection'): boolean {
 }
 
 // ── honesty check-ins ────────────────────────────────────────────────────────
-export interface PendingCheck {
-  issuedAt: number;
-  deadline: number;
-}
-
 export function getPendingCheck(): PendingCheck | null {
   return kvGet<PendingCheck>('pending_check');
 }
@@ -107,9 +109,18 @@ export function issueHonestyCheck(deadlineMs = CHECK_DEADLINE_MS): void {
   kvSet('last_check_issued_at', at);
 }
 
-export function passHonestyCheck(): void {
+/** The user opened the breath test: give them time to finish it even if the deadline passes. */
+export function startHonestyAttempt(): void {
+  const pending = getPendingCheck();
+  if (pending && pending.attemptStartedAt == null) kvSet('pending_check', { ...pending, attemptStartedAt: now() });
+}
+
+/** Returns false (and awards nothing) if there was no open check to pass. */
+export function passHonestyCheck(): boolean {
+  if (!getPendingCheck()) return false;
   kvDelete('pending_check');
   addXp(XP_REWARDS.BREATH_TEST);
+  return true;
 }
 
 export function spendSkipPass(): boolean {
@@ -120,7 +131,13 @@ export function spendSkipPass(): boolean {
   return true;
 }
 
-/** Called by the monitor when the deadline passes: skipping counts the same as a slip. */
+/** The deadline passed while the app was closed or hidden: lapse without a lock. */
+export function expireHonestyCheck(): void {
+  kvDelete('pending_check');
+  kvSet('last_check_expired_at', now());
+}
+
+/** The deadline passed while the app was on screen: skipping counts the same as a slip. */
 export function missHonestyCheck(): void {
   const p = getProfile();
   kvDelete('pending_check');

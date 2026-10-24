@@ -1,11 +1,14 @@
 import { AnimatePresence, motion } from 'framer-motion';
-import { ChartSpline, FlaskConical, House, Lock, ShieldAlert, Swords, X, Zap } from 'lucide-react';
-import type { ReactNode } from 'react';
+import { ChartSpline, DatabaseZap, FlaskConical, House, Lock, ShieldAlert, Swords, X, Zap } from 'lucide-react';
+import { useState, useSyncExternalStore, type ReactNode } from 'react';
 import { effectiveLockEnd } from '../db/repo.ts';
+import { effectiveDeadline } from '../engine/checks.ts';
+import { getPersistState, subscribePersist } from '../db/sqlite.ts';
 import { useNow } from '../hooks/useNow.ts';
 import { formatClock, formatCountdown, pct } from '../lib/format.ts';
 import { getPendingCheck, spendSkipPass } from '../state/actions.ts';
 import { useEngine } from '../state/engine.tsx';
+import { useJudgeMode } from '../state/judge.ts';
 import { useUI, type Tab } from '../state/ui.tsx';
 
 const TABS: { id: Tab; label: string; icon: ReactNode }[] = [
@@ -17,8 +20,10 @@ const TABS: { id: Tab; label: string; icon: ReactNode }[] = [
 
 export function BottomNav() {
   const { tab, setTab, open } = useUI();
+  // The Lab is a judge/demo tool, hidden unless judge mode is on (see state/judge.ts).
+  const judge = useJudgeMode();
   const left = TABS.slice(0, 2);
-  const right = TABS.slice(2);
+  const right = TABS.slice(2).filter((t) => t.id !== 'lab' || judge);
   const item = (t: (typeof TABS)[number]) => (
     <button
       key={t.id}
@@ -51,7 +56,22 @@ export function BottomNav() {
   );
 }
 
-function Banner({ tone, icon, children, onClick, onDismiss }: { tone: string; icon: ReactNode; children: ReactNode; onClick?: () => void; onDismiss?: () => void }) {
+function Banner({
+  tone,
+  icon,
+  children,
+  onClick,
+  onDismiss,
+  action,
+}: {
+  tone: string;
+  icon: ReactNode;
+  children: ReactNode;
+  onClick?: () => void;
+  onDismiss?: () => void;
+  /** A secondary control, kept outside the main button so it stays its own focusable button. */
+  action?: ReactNode;
+}) {
   return (
     <motion.div
       initial={{ opacity: 0, y: -12 }}
@@ -66,8 +86,9 @@ function Banner({ tone, icon, children, onClick, onDismiss }: { tone: string; ic
         </div>
         <div className="min-w-0 text-sm leading-snug">{children}</div>
       </button>
+      {action}
       {onDismiss && (
-        <button onClick={onDismiss} className="rounded-full p-1.5 text-muted" aria-label="Dismiss">
+        <button onClick={onDismiss} className="-m-1 rounded-full p-2.5 text-muted" aria-label="Dismiss">
           <X size={16} />
         </button>
       )}
@@ -82,32 +103,46 @@ export function Banners() {
   const t = useNow(1000);
   void dbVersion;
   const pending = getPendingCheck();
+  const persist = useSyncExternalStore(subscribePersist, getPersistState);
+  const [corruptSeen, setCorruptSeen] = useState(false);
 
   return (
     <div className="relative z-30 flex shrink-0 flex-col">
       <AnimatePresence>
+        {persist.error && (
+          <Banner key="persist" tone="var(--color-danger)" icon={<DatabaseZap size={18} />}>
+            <div className="font-semibold">Progress isn’t being saved</div>
+            <div className="text-xs text-muted">{persist.error} Changes will be lost when this page closes.</div>
+          </Banner>
+        )}
+        {persist.corruptBackupKey && !corruptSeen && (
+          <Banner key="corrupt" tone="var(--color-amber)" icon={<DatabaseZap size={18} />} onDismiss={() => setCorruptSeen(true)}>
+            <div className="font-semibold">Saved data couldn’t be read</div>
+            <div className="text-xs text-muted">Exhale started fresh. The damaged copy was kept on this device, not deleted.</div>
+          </Banner>
+        )}
         {pending && (
-          <Banner key="check" tone="var(--color-violet)" icon={<ShieldAlert size={18} />} onClick={() => open({ kind: 'fight', mode: 'check' })}>
-            <div className="font-semibold">Honesty check-in · {formatCountdown(pending.deadline - t)}</div>
-            <div className="text-xs text-muted">
-              15-second breath test. Skip it and your apps lock.
-              {profile.skipPasses > 0 && (
-                <>
-                  {' '}
-                  <span
-                    role="button"
-                    tabIndex={0}
-                    className="font-semibold text-violet underline"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      if (spendSkipPass()) toast('Skip pass used.', 'info');
-                    }}
-                  >
-                    Use skip pass ({profile.skipPasses})
-                  </span>
-                </>
-              )}
-            </div>
+          <Banner
+            key="check"
+            tone="var(--color-violet)"
+            icon={<ShieldAlert size={18} />}
+            onClick={() => open({ kind: 'fight', mode: 'check' })}
+            action={
+              profile.skipPasses > 0 && (
+                <button
+                  className="shrink-0 rounded-xl px-2 py-1.5 text-xs font-semibold text-violet underline"
+                  aria-label={`Use a skip pass (${profile.skipPasses} left)`}
+                  onClick={() => {
+                    if (spendSkipPass()) toast('Skip pass used.', 'info');
+                  }}
+                >
+                  Skip ({profile.skipPasses})
+                </button>
+              )
+            }
+          >
+            <div className="font-semibold">Honesty check-in · {formatCountdown(effectiveDeadline(pending) - t)}</div>
+            <div className="text-xs text-muted">15-second breath test. Skip it while Exhale is open and your apps lock.</div>
           </Banner>
         )}
         {nudge && !lock && (

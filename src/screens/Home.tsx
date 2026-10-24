@@ -1,12 +1,15 @@
 import { motion } from 'framer-motion';
-import { ChevronRight, Flame, HeartPulse, LifeBuoy, PiggyBank, Swords, Ticket, Wind } from 'lucide-react';
+import { ChevronRight, Flame, HeartPulse, LifeBuoy, PiggyBank, ShieldCheck, Swords, Ticket, Trash2, Wind } from 'lucide-react';
 import { LungAvatar } from '../components/LungAvatar.tsx';
 import { RiskGauge } from '../components/RiskGauge.tsx';
 import { LevelCard, ProgressBar, Section, Stat } from '../components/ui.tsx';
+import { resetAll } from '../db/repo.ts';
 import { useNow } from '../hooks/useNow.ts';
 import { lungHealth, milestoneProgress, moneySaved, secondsSinceUse, streakDays } from '../engine/recovery.ts';
 import { formatClock, formatDuration, formatIn } from '../lib/format.ts';
+import { resetClock } from '../state/clock.ts';
 import { useEngine } from '../state/engine.tsx';
+import { setSim } from '../state/simulator.ts';
 import { useUI } from '../state/ui.tsx';
 
 function soberClock(seconds: number): string {
@@ -19,7 +22,7 @@ function soberClock(seconds: number): string {
 }
 
 export function Home() {
-  const { profile, history, risk, windows, watchWindows, simulated, model } = useEngine();
+  const { profile, history, risk, windows, watchWindows, simulated, model, lock } = useEngine();
   const { open, setTab } = useUI();
   const t = useNow(1000);
 
@@ -150,6 +153,31 @@ export function Home() {
             free texts from This is Quitting, or call <span className="font-semibold text-text">1-800-QUIT-NOW</span>. A doctor or school
             nurse can help too.
           </div>
+        </div>
+      </Section>
+
+      <Section title="Your data">
+        <div className="card p-4 text-sm leading-relaxed text-muted">
+          <div className="flex gap-3">
+            <ShieldCheck size={20} className="mt-0.5 shrink-0 text-mint" />
+            <div>
+              Everything you log stays in a database on this device. There’s no account and no server, and the microphone is never
+              recorded.
+            </div>
+          </div>
+          <button
+            className="btn btn-danger mt-3 w-full text-sm"
+            disabled={lock != null}
+            onClick={() => {
+              if (!window.confirm('Delete everything Exhale has stored on this device? This can’t be undone.')) return;
+              setSim({ enabled: false });
+              resetClock();
+              resetAll();
+            }}
+          >
+            <Trash2 size={16} /> Delete my data
+          </button>
+          {lock && <p className="mt-2 text-center text-xs text-faint">Available once the current lock ends.</p>}
         </div>
       </Section>
     </div>

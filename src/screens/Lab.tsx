@@ -1,4 +1,4 @@
-import { Bell, Database, FastForward, RotateCcw, ShieldAlert, Sparkles, Trash2, Zap } from 'lucide-react';
+import { Bell, Database, FastForward, LogOut, RotateCcw, ShieldAlert, Sparkles, Trash2, Zap } from 'lucide-react';
 import { useState, type ReactNode } from 'react';
 import { RiskGauge } from '../components/RiskGauge.tsx';
 import { Section } from '../components/ui.tsx';
@@ -12,6 +12,7 @@ import { formatClock, formatDay, formatMinuteOfDay, pct } from '../lib/format.ts
 import { issueHonestyCheck } from '../state/actions.ts';
 import { clockOffset, now, resetClock, warp } from '../state/clock.ts';
 import { useEngine } from '../state/engine.tsx';
+import { setJudgeMode } from '../state/judge.ts';
 import { nextSchoolDay, setSim, useSim } from '../state/simulator.ts';
 import { useUI } from '../state/ui.tsx';
 
@@ -145,7 +146,7 @@ function DbInspector() {
     <div className="card p-4">
       <div className="flex flex-wrap gap-1.5">
         {TABLES.map((tname) => (
-          <button key={tname} className="chip px-2.5 py-1 font-mono text-[11px]" data-on={table === tname} onClick={() => setTable(tname)}>
+          <button key={tname} className="chip px-2.5 py-1 font-mono text-[11px]" data-on={table === tname} aria-pressed={table === tname} onClick={() => setTable(tname)}>
             {tname}
           </button>
         ))}
@@ -189,6 +190,7 @@ export function Lab() {
   const offset = clockOffset();
 
   const loadDemo = () => {
+    if (!window.confirm('Replace everything on this device with the 14-day demo user? Your own history will be deleted.')) return;
     resetClock();
     seedDemo(now(), profile.lockedApps);
     setSim({ enabled: false });
@@ -206,7 +208,10 @@ export function Lab() {
         <h1 className="font-display text-2xl font-semibold">Lab</h1>
         <span className="rounded-full bg-violet/15 px-2.5 py-1 text-[11px] font-semibold text-violet">Judge mode</span>
       </div>
-      <p className="px-1 text-sm text-muted">Look inside the prediction engine. Override the sensors and watch the model react.</p>
+      <p className="px-1 text-sm text-muted">
+        Look inside the prediction engine. Override the sensors and watch the model react. Simulated readings only change what’s
+        shown; anything you log is saved with live readings.
+      </p>
 
       <div className="card mt-4 p-4">
         <div className="flex justify-center">
@@ -224,7 +229,7 @@ export function Lab() {
             <div className="mb-1.5 text-xs text-muted">Day of week</div>
             <div className="grid grid-cols-7 gap-1.5">
               {WEEKDAYS.map((d, i) => (
-                <button key={i} className="chip px-0 py-1.5" data-on={sim.weekday === i} onClick={() => setSim({ weekday: i })} aria-label={['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][i]}>
+                <button key={i} className="chip px-0 py-1.5" data-on={sim.weekday === i} aria-pressed={sim.weekday === i} onClick={() => setSim({ weekday: i })} aria-label={['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][i]}>
                   {d}
                 </button>
               ))}
@@ -245,7 +250,7 @@ export function Lab() {
             <div className="mb-1.5 text-xs text-muted">Location (affects C)</div>
             <div className="flex gap-1.5">
               {LOCATIONS.map((l) => (
-                <button key={l} className="chip px-3 py-1.5" data-on={sim.location === l} onClick={() => setSim({ location: l })}>
+                <button key={l} className="chip px-3 py-1.5" data-on={sim.location === l} aria-pressed={sim.location === l} onClick={() => setSim({ location: l })}>
                   {LOCATION_LABELS[l]}
                 </button>
               ))}
@@ -294,7 +299,11 @@ export function Lab() {
           <button className="btn btn-ghost mt-2 w-full py-2.5 text-sm" disabled={offset === 0} onClick={resetClock}>
             <RotateCcw size={14} /> Back to real time
           </button>
-          <p className="mt-2 text-xs text-muted">Jump ahead to watch lungs heal, locks expire and the model hand over from heuristic to personal.</p>
+          <p className="mt-2 text-xs text-muted">
+            Jump ahead to watch lungs heal, locks expire and the model hand over from heuristic to personal. Only available in judge
+            mode. Going back to real time restarts any active lock from now; things logged “in the future” keep their future times,
+            so reload the demo user for a clean slate.
+          </p>
         </div>
       </Section>
 
@@ -321,6 +330,15 @@ export function Lab() {
             }}
           >
             <Bell size={16} /> Enable notifications
+          </button>
+          <button
+            className="btn btn-ghost text-sm"
+            onClick={() => {
+              setJudgeMode(false);
+              toast('Judge mode off. Back on real time; add ?judge=1 to the URL to return.', 'info');
+            }}
+          >
+            <LogOut size={16} /> Exit judge mode
           </button>
           <button
             className="btn btn-danger text-sm"

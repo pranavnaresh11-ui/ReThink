@@ -1,9 +1,9 @@
 import { motion } from 'framer-motion';
 import { Check, Lock, Wind } from 'lucide-react';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { effectiveLockEnd } from '../db/repo.ts';
 import { LungAvatar } from '../components/LungAvatar.tsx';
-import { ProgressBar, STRESS_FACES, Sheet } from '../components/ui.tsx';
+import { ProgressBar, STRESS_FACES, Sheet, useDialog } from '../components/ui.tsx';
 import { inferLocation } from '../engine/features.ts';
 import { lungHealth, milestoneProgress } from '../engine/recovery.ts';
 import { LOCATIONS, LOCATION_LABELS, type CravingLevel, type LocationTag } from '../engine/types.ts';
@@ -39,7 +39,7 @@ function LocationPicker({ value, onChange }: { value: LocationTag; onChange: (v:
   return (
     <div className="flex flex-wrap gap-2">
       {LOCATIONS.map((l) => (
-        <button key={l} className="chip" data-on={value === l} onClick={() => onChange(l)}>
+        <button key={l} className="chip" data-on={value === l} aria-pressed={value === l} onClick={() => onChange(l)}>
           {LOCATION_LABELS[l]}
         </button>
       ))}
@@ -48,13 +48,17 @@ function LocationPicker({ value, onChange }: { value: LocationTag; onChange: (v:
 }
 
 export function RelapseSheet({ onClose }: { onClose: () => void }) {
-  const { profile, risk } = useEngine();
+  // liveRisk, not risk: a slip logged during a Lab simulation must still record the real prediction.
+  const { profile, liveRisk, simulated } = useEngine();
   const { setTab, toast } = useUI();
   const [stress, setStress] = useState(3);
   const [location, setLocation] = useState<LocationTag>(() => inferLocation(now()));
+  const logged = useRef(false);
 
   const confirm = () => {
-    logRelapse({ stress, location, predictedRisk: risk.p });
+    if (logged.current) return;
+    logged.current = true;
+    logRelapse({ stress, location, predictedRisk: liveRisk.p });
     haptic(HAPTICS.warn);
     toast('+5 XP for being honest', 'xp');
     onClose();
@@ -83,6 +87,9 @@ export function RelapseSheet({ onClose }: { onClose: () => void }) {
           {LOCK_REDUCTION_MIN * MAX_LOCK_REDUCTIONS} minutes back.
         </p>
       </div>
+      {simulated && (
+        <p className="mt-3 text-xs text-violet">Sensor override is on, but this slip is saved as real, with live readings.</p>
+      )}
       <button className="btn btn-primary mt-5 w-full py-4" onClick={confirm}>
         Log it and start the reset
       </button>
@@ -95,8 +102,11 @@ export function CheckInSheet({ onClose }: { onClose: () => void }) {
   const [stress, setStress] = useState(2);
   const [location, setLocation] = useState<LocationTag>(() => inferLocation(now()));
   const [craving, setCraving] = useState<CravingLevel>(0);
+  const saved = useRef(false);
 
   const submit = () => {
+    if (saved.current) return;
+    saved.current = true;
     const xp = submitCheckIn({ stress, location, cravingNow: craving });
     if (xp) toast(`Check-in saved · +${xp} XP`, 'xp');
     else toast('Check-in saved', 'info');
@@ -113,7 +123,7 @@ export function CheckInSheet({ onClose }: { onClose: () => void }) {
       <div className="eyebrow mb-2 mt-5">Craving?</div>
       <div className="grid grid-cols-3 gap-2">
         {(['None', 'A little', 'Strong'] as const).map((label, i) => (
-          <button key={label} className="chip py-2.5" data-on={craving === i} onClick={() => setCraving(i as CravingLevel)}>
+          <button key={label} className="chip py-2.5" data-on={craving === i} aria-pressed={craving === i} onClick={() => setCraving(i as CravingLevel)}>
             {label}
           </button>
         ))}
@@ -132,6 +142,7 @@ export function ReflectSheet({ onClose }: { onClose: () => void }) {
   const { toast } = useUI();
   const [answers, setAnswers] = useState(['', '', '']);
   const ready = answers.every((a) => a.trim().length >= 3);
+  const done = useRef(false);
 
   return (
     <Sheet title="Trigger reflection" onClose={onClose}>
@@ -151,8 +162,10 @@ export function ReflectSheet({ onClose }: { onClose: () => void }) {
         className="btn btn-primary mt-5 w-full py-4"
         disabled={!ready}
         onClick={() => {
+          if (done.current) return;
+          done.current = true;
           if (earnLockTime('reflection')) toast(`−${LOCK_REDUCTION_MIN} min on your lock · +15 XP`, 'xp');
-          else toast('You’ve already earned the maximum back for this lock.', 'info');
+          else toast('No active lock, or you’ve already earned the maximum back.', 'info');
           onClose();
         }}
       >
@@ -169,11 +182,17 @@ export function ShieldOverlay({ appId, onClose }: { appId: string; onClose: () =
   const t = useNow(1000);
   const app = appById(appId);
   const remaining = lock ? effectiveLockEnd(lock) - t : 0;
+  const dialog = useDialog<HTMLDivElement>(onClose);
   const Icon = app?.icon ?? Lock;
 
   return (
     <motion.div
-      className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-[#05090d]/92 px-8 text-center backdrop-blur-xl"
+      ref={dialog}
+      role="dialog"
+      aria-modal="true"
+      aria-label={`${app?.name ?? 'App'} is locked`}
+      tabIndex={-1}
+      className="absolute inset-0 z-50 flex flex-col items-center justify-center outline-none bg-[#05090d]/92 px-8 text-center backdrop-blur-xl"
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}

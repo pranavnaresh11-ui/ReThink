@@ -145,7 +145,7 @@ export function Apps() {
         <div className="card p-4">
           <div className="flex flex-wrap gap-2">
             {LOCKABLE_APPS.map((a) => (
-              <button key={a.id} className="chip" data-on={lockedSet.has(a.id)} onClick={() => toggleApp(a.id)}>
+              <button key={a.id} className="chip" data-on={lockedSet.has(a.id)} aria-pressed={lockedSet.has(a.id)} onClick={() => toggleApp(a.id)}>
                 {a.name}
               </button>
             ))}
@@ -154,7 +154,7 @@ export function Apps() {
             <span className="text-muted">Lock length</span>
             <div className="flex gap-1.5">
               {[15, 30, 45, 60].map((m) => (
-                <button key={m} className="chip px-3 py-1.5" data-on={profile.lockMinutes === m} onClick={() => updateProfile({ lockMinutes: m })}>
+                <button key={m} className="chip px-3 py-1.5" data-on={profile.lockMinutes === m} aria-pressed={profile.lockMinutes === m} onClick={() => updateProfile({ lockMinutes: m })}>
                   {m}m
                 </button>
               ))}

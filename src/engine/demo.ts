@@ -1,4 +1,4 @@
-import { MS_PER_DAY, MS_PER_MIN, featuresAt, isWeekend, minuteOfDay, nicotineDecay, startOfDay } from './features.ts';
+import { MS_PER_MIN, addDays, atMinuteOfDay, featuresAt, isWeekend, minuteOfDay, nicotineDecay } from './features.ts';
 import { heuristicLogit } from './heuristic.ts';
 import { sigmoid } from './logistic.ts';
 import type { CheckIn, CravingEvent, History, LocationTag } from './types.ts';
@@ -59,13 +59,14 @@ export interface DemoData {
  */
 export function generateDemoHistory(now: number, days = 14, dependence = 0.58): DemoData {
   const random = rng(42);
-  const trackingStart = startOfDay(now) - (days - 1) * MS_PER_DAY + 7 * 60 * MS_PER_MIN;
+  // Calendar-day steps, so wall-clock times stay put across daylight-saving changes.
+  const trackingStart = atMinuteOfDay(addDays(now, -(days - 1)), 7 * 60);
   const cravings: Omit<CravingEvent, 'id'>[] = [];
   const checkIns: Omit<CheckIn, 'id'>[] = [];
 
   let lastUse = trackingStart;
   for (let d = 0; d < days; d++) {
-    const day = startOfDay(trackingStart) + d * MS_PER_DAY;
+    const day = addDays(trackingStart, d);
     const weekend = isWeekend(day + 12 * 3600_000);
     const slots = weekend ? WEEKEND : WEEKDAY;
     // Some days are just harder (tests, arguments): 1 = calm, 5 = rough.
@@ -75,7 +76,7 @@ export function generateDemoHistory(now: number, days = 14, dependence = 0.58): 
       [8 * 60 + 5, 0],
       [19 * 60 + 30, -1],
     ] as const) {
-      const at = day + (minute + Math.round(random() * 30)) * MS_PER_MIN;
+      const at = atMinuteOfDay(day, minute + Math.round(random() * 30));
       if (at < trackingStart || at > now || random() < 0.2) continue;
       checkIns.push({
         at,
@@ -87,7 +88,7 @@ export function generateDemoHistory(now: number, days = 14, dependence = 0.58): 
 
     slots.forEach((slot, i) => {
       const minute = slot.minute + (random() * 2 - 1) * slot.jitter;
-      const at = day + Math.round(minute) * MS_PER_MIN;
+      const at = atMinuteOfDay(day, Math.round(minute));
       if (at < trackingStart || at > now) return;
       const lastNight = d === days - 2 && i === slots.length - 1;
       const forcedRelapse = lastNight || (!weekend && RELAPSES.some(([rd, rs]) => rd === d && rs === i));

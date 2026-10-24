@@ -1,66 +1,57 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
+import { MicMeter, type MicAudio, type MicEnv, type MicStatus } from '../lib/micMeter.ts';
 
-export type MicStatus = 'idle' | 'requesting' | 'live' | 'denied' | 'unsupported';
+export { micProblem, type MicStatus } from '../lib/micMeter.ts';
 
-/**
- * Microphone RMS level (0..1), the web equivalent of AVAudioRecorder metering.
- * Blowing across a mic produces broadband noise with a big, steady RMS, which is
- * what the breathing games measure.
- */
-export function useMicLevel() {
-  const [status, setStatus] = useState<MicStatus>('idle');
-  const level = useRef(0);
-  const stream = useRef<MediaStream | null>(null);
-  const ctx = useRef<AudioContext | null>(null);
-  const raf = useRef(0);
+function audioContextCtor(): typeof AudioContext | undefined {
+  // Older iOS Safari only has the prefixed constructor.
+  return window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+}
 
-  const stop = useCallback(() => {
-    cancelAnimationFrame(raf.current);
-    stream.current?.getTracks().forEach((t) => t.stop());
-    void ctx.current?.close();
-    stream.current = null;
-    ctx.current = null;
-    level.current = 0;
-  }, []);
-
-  /** Resolves true once the mic is live, false if it's unavailable or denied. */
-  const start = useCallback(async (): Promise<boolean> => {
-    if (stream.current) return true;
-    if (!navigator.mediaDevices?.getUserMedia) {
-      setStatus('unsupported');
-      return false;
-    }
-    setStatus('requesting');
-    try {
-      const s = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
-      });
-      const audio = new AudioContext();
-      const analyser = audio.createAnalyser();
+function webAudio(Ctor: typeof AudioContext): MicAudio<MediaStream> {
+  const ctx = new Ctor();
+  return {
+    get state() {
+      return ctx.state;
+    },
+    resume: () => ctx.resume(),
+    close: () => ctx.close(),
+    analyse(stream) {
+      const analyser = ctx.createAnalyser();
       analyser.fftSize = 1024;
-      audio.createMediaStreamSource(s).connect(analyser);
+      ctx.createMediaStreamSource(stream).connect(analyser);
       const buf = new Float32Array(analyser.fftSize);
-      const loop = () => {
+      return () => {
         analyser.getFloatTimeDomainData(buf);
         let sum = 0;
         for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
-        const rms = Math.sqrt(sum / buf.length);
-        // Light smoothing so the UI doesn't flicker.
-        level.current = level.current * 0.7 + Math.min(1, rms * 4) * 0.3;
-        raf.current = requestAnimationFrame(loop);
+        return Math.sqrt(sum / buf.length);
       };
-      stream.current = s;
-      ctx.current = audio;
-      loop();
-      setStatus('live');
-      return true;
-    } catch {
-      setStatus('denied');
-      return false;
-    }
-  }, []);
+    },
+    onStateChange(listener) {
+      ctx.onstatechange = listener;
+    },
+  };
+}
 
-  useEffect(() => stop, [stop]);
+function browserMicEnv(): MicEnv<MediaStream> {
+  const Ctor = audioContextCtor();
+  const media = navigator.mediaDevices;
+  return {
+    isSecureContext: window.isSecureContext,
+    getUserMedia: media?.getUserMedia
+      ? () => media.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } })
+      : undefined,
+    createAudio: Ctor ? () => webAudio(Ctor) : undefined,
+    requestAnimationFrame: (cb) => window.requestAnimationFrame(cb),
+    cancelAnimationFrame: (id) => window.cancelAnimationFrame(id),
+  };
+}
 
-  return { status, level, start, stop };
+/** React wrapper around MicMeter; the mic is released when the component unmounts. */
+export function useMicLevel() {
+  const [status, setStatus] = useState<MicStatus>('idle');
+  const [meter] = useState(() => new MicMeter(browserMicEnv(), setStatus));
+  useEffect(() => meter.stop, [meter]);
+  return { status, level: meter.level, start: meter.start, stop: meter.stop };
 }

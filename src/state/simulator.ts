@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from 'react';
 import type { LocationTag } from '../engine/types.ts';
+import { now } from './clock.ts';
 
 /** Sensor overrides for demos: when enabled, these replace the live feature values. */
 export interface SimState {
@@ -12,9 +13,9 @@ export interface SimState {
   location: LocationTag;
 }
 
-/** Today if it's a school day, otherwise Monday. */
+/** Today (on the app clock) if it's a school day, otherwise Monday. */
 export function nextSchoolDay(): number {
-  const d = new Date().getDay();
+  const d = new Date(now()).getDay();
   return d === 0 || d === 6 ? 1 : d;
 }
 

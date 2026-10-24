@@ -64,6 +64,21 @@ export function startOfDay(t: number): number {
   return d.getTime();
 }
 
+/**
+ * Local midnight `days` calendar days after the day containing `t`. Days around a
+ * daylight-saving change are 23 or 25 hours long, so adding 24 h would drift.
+ */
+export function addDays(t: number, days: number): number {
+  const d = new Date(t);
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate() + days).getTime();
+}
+
+/** The wall-clock time `minute` (may be fractional) on the local day containing `day`. */
+export function atMinuteOfDay(day: number, minute: number): number {
+  const d = new Date(day);
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, 0, 0, Math.round(minute * MS_PER_MIN)).getTime();
+}
+
 /** Fallback when the user hasn't tagged where they are: school hours on weekdays, home otherwise. */
 export function inferLocation(t: number): LocationTag {
   const m = minuteOfDay(t);
