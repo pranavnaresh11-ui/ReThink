@@ -1,4 +1,4 @@
-# Exhale
+# ReThink
 
 A quit-vaping app for teens that predicts cravings before they hit, locks your distracting apps if you slip, and turns quitting into a game you can see working in your own lungs.
 
